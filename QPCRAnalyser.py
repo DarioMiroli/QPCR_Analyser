@@ -13,6 +13,10 @@ class QPCRAnalyser(QtGui.QMainWindow):
         '''
         #Start with essential data structures
         self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[]}
+        #Set global settings for plots
+        pg.setConfigOption('background', (40,40,40))
+        pg.setConfigOption('foreground', (220,220,220))
+        #Call functions to set up GUI
         self.app = QtGui.QApplication([])
         QtGui.QMainWindow.__init__(self,parent)
         self.createMenuBar()
@@ -31,6 +35,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         '''
         #Create menu bar
         menuBar = self.menuBar()
+        menuBar.setNativeMenuBar(False)
         #Status bar allows hints to be shown at bottom of window
         self.statusBar()
         #Add file menu
@@ -92,14 +97,17 @@ class QPCRAnalyser(QtGui.QMainWindow):
 
         #Top left add plot
         self.rawPlot = pg.PlotWidget()
+        self.rawPlot.showGrid(x=True,y=True)
         mainLayout.addWidget(self.rawPlot,0,0)
 
         #Top right add plot
         self.logPlot = pg.PlotWidget()
+        self.logPlot.showGrid(x=True,y=True)
         mainLayout.addWidget(self.logPlot,0,1)
 
         #Bottom right plot
         self.cPlot = pg.PlotWidget()
+        self.cPlot.showGrid(x=True,y=True)
         mainLayout.addWidget(self.cPlot,1,1)
 
         #Add layout to main window
