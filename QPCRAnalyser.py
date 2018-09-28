@@ -12,7 +12,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         Constructor for the analyser GUI
         '''
         #Start with essential data structures
-        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[]}
+        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[],"Visible":[],"RawCurves":[]}
         #Set global settings for plots
         pg.setConfigOption('background', (40,40,40))
         pg.setConfigOption('foreground', (220,220,220))
@@ -59,7 +59,6 @@ class QPCRAnalyser(QtGui.QMainWindow):
         if filePath != '':
             self.readQPCRFile(filePath)
             self.setUpUI()
-            self.plotRawData()
 
     def readQPCRFile(self,filePath):
         '''
@@ -86,6 +85,8 @@ class QPCRAnalyser(QtGui.QMainWindow):
             if i > 0:
                 self.data["Ys"].append(y)
                 self.data["Xs"].append(x)
+                self.data["Visible"].append(False)
+                self.data["RawCurves"].append(pg.PlotCurveItem(x,y))
 
     def setUpUI(self):
         '''
@@ -114,11 +115,77 @@ class QPCRAnalyser(QtGui.QMainWindow):
         mainWidget.setLayout(mainLayout)
         self.setCentralWidget(mainWidget)
 
-    def plotRawData(self):
-        self.rawPlot.clear()
-        for i,cell in enumerate(self.data["Cells"]):
-            curve = pg.PlotCurveItem(self.data["Xs"][i],self.data["Ys"][i],pen=(i,len(self.data["Cells"])))
-            self.rawPlot.addItem(curve)
+
+        #Add plate buttons
+        plateLayout  = QtGui.QGridLayout()
+        plateLayout.setSpacing(0)
+        columns = [str(i) for i in range(1,13)]
+        rows = ["A","B","C","D","E","F","G","H"]
+        #Create column headers
+        for i,column in enumerate(columns):
+            headerBtn = QtGui.QPushButton(column)
+            headerBtn.setSizePolicy(QtGui.QSizePolicy.Ignored,QtGui.QSizePolicy.Preferred)
+            plateLayout.addWidget(headerBtn,0,i+1)
+        #Create row headers
+        for i,row in enumerate(rows):
+            headerBtn = QtGui.QPushButton(row)
+            headerBtn.setSizePolicy(QtGui.QSizePolicy.Ignored,QtGui.QSizePolicy.Preferred)
+            plateLayout.addWidget(headerBtn,i+1,0)
+        #Create cell buttons
+        for i in range(1,len(rows)+1):
+            for j in range(1,len(columns)+1):
+                btn = QtGui.QPushButton(rows[i-1]+columns[j-1])
+                btn.setSizePolicy(QtGui.QSizePolicy.Ignored,QtGui.QSizePolicy.Preferred)
+                btn.setCheckable(True)
+                btn.clicked.connect(self.onCellPress)
+                plateLayout.addWidget(btn,i,j)
+        #Add layout to main layout
+        mainLayout.addLayout(plateLayout,1,0)
+
+        #Add marquee selection
+        self.rubberband = QtGui.QRubberBand(QtGui.QRubberBand.Rectangle, self)
+        self.setMouseTracking(True)
+
+    def onCellPress(self):
+        for i,name in enumerate(self.data["Cells"]):
+            if str(self.sender().text()) == name.split()[0]:
+                if self.sender().isChecked():
+                    self.rawPlot.addItem(self.data["RawCurves"][i])
+                    self.data["Visible"][i] = True
+                else:
+                    self.rawPlot.removeItem(self.data["RawCurves"][i])
+                    self.data["Visible"][i] = False
+        n = np.sum(self.data["Visible"])
+        j= 0
+        for i,curve in enumerate(self.data["RawCurves"]):
+            if self.data["Visible"][i]:
+                curve.setPen((j,n))
+                j+=1
+
+    def mousePressEvent(self, event):
+        self.origin = event.pos()
+        self.rubberband.setGeometry(
+            QtCore.QRect(self.origin, QtCore.QSize()))
+        self.rubberband.show()
+        QtGui.QWidget.mousePressEvent(self, event)
+
+    def mouseMoveEvent(self, event):
+        if self.rubberband.isVisible():
+            self.rubberband.setGeometry(QtCore.QRect(self.origin, event.pos()).normalized())
+        QtGui.QWidget.mouseMoveEvent(self, event)
+
+    def mouseReleaseEvent(self, event):
+        if self.rubberband.isVisible():
+            self.rubberband.hide()
+            selected = []
+            rect = self.rubberband.geometry()
+            for child in self.findChildren(QtGui.QPushButton):
+                if rect.intersects(child.geometry()):
+                    selected.append(child)
+            for btn in selected:
+                #btn.setChecked(True)
+                btn.animateClick()
+            QtGui.QWidget.mouseReleaseEvent(self, event)
 
 if __name__ == '__main__':
     from QPCRAnalyser import QPCRAnalyser as QPCRA
