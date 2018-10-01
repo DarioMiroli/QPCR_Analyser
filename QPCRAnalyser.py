@@ -12,7 +12,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         Constructor for the analyser GUI
         '''
         #Start with essential data structures
-        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[],"Visible":[],"RawCurves":[]}
+        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[],"Visible":[],"RawCurves":[],"LogCurves":[],"Hs":[],"HCurves":[]}
         #Set global settings for plots
         pg.setConfigOption('background', (40,40,40))
         pg.setConfigOption('foreground', (220,220,220))
@@ -47,6 +47,13 @@ class QPCRAnalyser(QtGui.QMainWindow):
         openFile.triggered.connect(self.onOpenFile)
         #Add open file action to file menu
         fileMenu.addAction(openFile)
+        #Add analysis menu
+        analysisMenu = menuBar.addMenu("Analysis")
+        setThresh = QtGui.QAction("Set threshold",self)
+        setThresh.setShortcut("Ctrl+t")
+        setThresh.setStatusTip('set threshold for log data')
+        setThresh.triggered.connect(self.onSelectThresh)
+        analysisMenu.addAction(setThresh)
 
     def onOpenFile(self):
         '''
@@ -87,6 +94,9 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 self.data["Xs"].append(x)
                 self.data["Visible"].append(False)
                 self.data["RawCurves"].append(pg.PlotCurveItem(x,y))
+                self.data["LogCurves"].append(pg.PlotDataItem(x,np.log(y),symbol='o',symbolSize=5,symbolPen=None))
+                self.data["Hs"].append(-1)
+                self.data["HCurves"].append(pg.InfiniteLine())
 
     def setUpUI(self):
         '''
@@ -101,10 +111,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.rawPlot.showGrid(x=True,y=True)
         mainLayout.addWidget(self.rawPlot,0,0)
 
-        #Top right add plot
+        #Top right add plot and slider
+        logPlotLayout = QtGui.QGridLayout()
         self.logPlot = pg.PlotWidget()
         self.logPlot.showGrid(x=True,y=True)
-        mainLayout.addWidget(self.logPlot,0,1)
+        logPlotLayout.addWidget(self.logPlot,0,0)
+        mainLayout.addLayout(logPlotLayout,0,1)
 
         #Bottom right plot
         self.cPlot = pg.PlotWidget()
@@ -114,7 +126,6 @@ class QPCRAnalyser(QtGui.QMainWindow):
         #Add layout to main window
         mainWidget.setLayout(mainLayout)
         self.setCentralWidget(mainWidget)
-
 
         #Add plate buttons
         plateLayout  = QtGui.QGridLayout()
@@ -151,41 +162,68 @@ class QPCRAnalyser(QtGui.QMainWindow):
             if str(self.sender().text()) == name.split()[0]:
                 if self.sender().isChecked():
                     self.rawPlot.addItem(self.data["RawCurves"][i])
+                    self.logPlot.addItem(self.data["LogCurves"][i])
+                    if len(self.data["HCurves"]) > 0:
+                        self.logPlot.addItem(self.data["HCurves"][i])
                     self.data["Visible"][i] = True
                 else:
                     self.rawPlot.removeItem(self.data["RawCurves"][i])
+                    self.logPlot.removeItem(self.data["LogCurves"][i])
+                    if len(self.data["HCurves"]) > 0:
+                        self.logPlot.removeItem(self.data["HCurves"][i])
                     self.data["Visible"][i] = False
         n = np.sum(self.data["Visible"])
         j= 0
         for i,curve in enumerate(self.data["RawCurves"]):
             if self.data["Visible"][i]:
                 curve.setPen((j,n))
+                self.data["LogCurves"][i].setPen(None)#(j,n))
+                self.data["LogCurves"][i].setSymbolBrush((j,n))
+                if len(self.data["HCurves"]) > 0:
+                    self.data["HCurves"][i].setPen((j,n))
                 j+=1
 
-    def mousePressEvent(self, event):
-        self.origin = event.pos()
-        self.rubberband.setGeometry(
-            QtCore.QRect(self.origin, QtCore.QSize()))
-        self.rubberband.show()
-        QtGui.QWidget.mousePressEvent(self, event)
+    def onSelectThresh(self):
+        num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value")
+        if ok:
+            try:
+                self.logPlot.removeItem(self.threshLine)
+            except:
+                pass
+            #Add horizontal line at value
+            self.threshold = num
+            self.threshLine  = pg.InfiniteLine(angle=0,pos=self.threshold)
+            self.logPlot.addItem(self.threshLine)
+            self.computeHs()
 
-    def mouseMoveEvent(self, event):
-        if self.rubberband.isVisible():
-            self.rubberband.setGeometry(QtCore.QRect(self.origin, event.pos()).normalized())
-        QtGui.QWidget.mouseMoveEvent(self, event)
+    def computeHs(self):
+        '''
+        Compute the cycle at which the selected data crosses the threshold value
+        '''
+        for i in range(len(self.data["Xs"])):
+            xs = self.data["Xs"][i]
+            ys = np.log(self.data["Ys"][i])
+            for j in range(len(xs)):
+                if ys[j] > self.threshold:
+                    #We have crossed threshold get points either side
+                    y2 = ys[j]
+                    y1 = ys[j-1]
+                    x2 = xs[j]
+                    x1 = xs[j-1]
+                    m = (y2-y1)/float((x2-x1))
+                    c = y2 - m*x2
+                    h = (self.threshold-c)/float(m)
+                    print(x1,x2,h)
+                    self.data["Hs"][i] = h
+                    try:
+                        vline = pg.InfiniteLine(angle=90,pos=h,pen=self.data["LogCurves"][i].opts["symbolBrush"])
+                    except:
+                        vline = pg.InfiniteLine(angle=90,pos=h,pen=self.data["LogCurves"][i].opts["symbolBrush"].color())
+                    self.data["HCurves"][i] = vline
+                    if self.data["Visible"][i]:
+                        self.logPlot.addItem(vline)
+                    break
 
-    def mouseReleaseEvent(self, event):
-        if self.rubberband.isVisible():
-            self.rubberband.hide()
-            selected = []
-            rect = self.rubberband.geometry()
-            for child in self.findChildren(QtGui.QPushButton):
-                if rect.intersects(child.geometry()):
-                    selected.append(child)
-            for btn in selected:
-                #btn.setChecked(True)
-                btn.animateClick()
-            QtGui.QWidget.mouseReleaseEvent(self, event)
 
 if __name__ == '__main__':
     from QPCRAnalyser import QPCRAnalyser as QPCRA
