@@ -54,6 +54,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
         setThresh.setStatusTip('set threshold for log data')
         setThresh.triggered.connect(self.onSelectThresh)
         analysisMenu.addAction(setThresh)
+        #Add distance calc
+        addDistance = QtGui.QAction("Add distance info",self)
+        addDistance.setShortcut("Ctrl+d")
+        addDistance.setStatusTip('Add information about spacing of shown data')
+        addDistance.triggered.connect(self.onAddDistance)
+        analysisMenu.addAction(addDistance)
 
     def onOpenFile(self):
         '''
@@ -213,7 +219,6 @@ class QPCRAnalyser(QtGui.QMainWindow):
                     m = (y2-y1)/float((x2-x1))
                     c = y2 - m*x2
                     h = (self.threshold-c)/float(m)
-                    print(x1,x2,h)
                     self.data["Hs"][i] = h
                     try:
                         vline = pg.InfiniteLine(angle=90,pos=h,pen=self.data["LogCurves"][i].opts["symbolBrush"])
@@ -223,6 +228,71 @@ class QPCRAnalyser(QtGui.QMainWindow):
                     if self.data["Visible"][i]:
                         self.logPlot.addItem(vline)
                     break
+
+    def onAddDistance(self):
+        D1 =DistanceDialog(self.data)
+        if D1.exec_():
+            values = D1.getValues()
+
+class DistanceDialog(QtGui.QDialog):
+
+    def __init__(self,dataDic,parent=None):
+        QtGui.QDialog.__init__(self,parent)
+        self.data = dataDic
+        self.setWindowTitle("Add distance data")
+        self.setUpUI()
+        self.setUpMainWidget()
+
+    def setUpMainWidget(self):
+        self.mainWidget = QtGui.QWidget()
+        self.mainLayout = QtGui.QGridLayout()
+        self.mainLayout.addLayout(self.uiLayout,0,0)
+        self.setLayout(self.mainLayout)
+        self.show()
+
+    def setUpUI(self):
+        self.uiLayout = QtGui.QGridLayout()
+        #Table for data
+        self.table = QtGui.QTableWidget()
+        self.table.setRowCount(np.sum(self.data["Visible"]))
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Cell","H value","Distance"])
+        self.uiLayout.addWidget(self.table,0,0,1,2)
+        self.populateTable()
+
+        #OK button
+        okButton = QtGui.QPushButton("OK")
+        okButton.clicked.connect(self.onOK)
+        self.uiLayout.addWidget(okButton,1,0,1,1)
+
+        #Cancel button
+        cancelButton = QtGui.QPushButton("Cancel")
+        cancelButton.clicked.connect(self.onCancel)
+        self.uiLayout.addWidget(cancelButton,1,1,1,1)
+
+    def onOK(self):
+        self.done(1)
+
+    def onCancel(self):
+        self.done(0)
+
+    def populateTable(self):
+        cells = []
+        Hs = []
+        for i,cell in enumerate(self.data["Cells"]):
+            if self.data["Visible"][i]:
+                cells.append(cell.split(" ")[0])
+                Hs.append(self.data["Hs"][i])
+        for row in range(self.table.rowCount()):
+            self.table.setItem(row,0, QtGui.QTableWidgetItem(str(cells[row])))
+            self.table.setItem(row,1, QtGui.QTableWidgetItem(str(round(Hs[row],1))))
+
+    def getValues(self):
+        #Read last oclumn
+        distances = []
+        for row in range(self.table.rowCount()):
+            distances.append(float(self.table.item(row,2).text()))
+        return distances
 
 
 if __name__ == '__main__':
