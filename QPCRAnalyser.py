@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
+from scipy import stats
 import os
 
 class QPCRAnalyser(QtGui.QMainWindow):
@@ -115,6 +116,10 @@ class QPCRAnalyser(QtGui.QMainWindow):
         #Top left add plot
         self.rawPlot = pg.PlotWidget()
         self.rawPlot.showGrid(x=True,y=True)
+        self.rawPlot.setLabel('bottom', "Cycle")
+        self.rawPlot.setLabel('left', "Flourescence")
+        self.rawPlot.setLabel('top', "Raw plot")
+        self.rawPlot.addLegend()
         mainLayout.addWidget(self.rawPlot,0,0)
 
         #Top right add plot and slider
@@ -122,11 +127,20 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.logPlot = pg.PlotWidget()
         self.logPlot.showGrid(x=True,y=True)
         logPlotLayout.addWidget(self.logPlot,0,0)
+        self.logPlot.setLabel('bottom', "Cycle")
+        self.logPlot.setLabel('left', "Log(flourescence)")
+        self.logPlot.setLabel('top', "Log plot")
+
+
         mainLayout.addLayout(logPlotLayout,0,1)
 
         #Bottom right plot
         self.cPlot = pg.PlotWidget()
         self.cPlot.showGrid(x=True,y=True)
+        self.cPlot.setLabel('bottom', "Delta G")
+        self.cPlot.setLabel('left', "Delta H")
+        self.cPlot.setLabel('top', "Delta H Delta G Plot")
+        self.cPlot.addLegend()
         mainLayout.addWidget(self.cPlot,1,1)
 
         #Add layout to main window
@@ -164,6 +178,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.setMouseTracking(True)
 
     def onCellPress(self):
+        self.rawPlot.plotItem.legend.items = []
         for i,name in enumerate(self.data["Cells"]):
             if str(self.sender().text()) == name.split()[0]:
                 if self.sender().isChecked():
@@ -182,6 +197,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         j= 0
         for i,curve in enumerate(self.data["RawCurves"]):
             if self.data["Visible"][i]:
+                self.rawPlot.plotItem.legend.addItem(self.data["RawCurves"][i],self.data["Cells"][i].split(" ")[0])
                 curve.setPen((j,n))
                 self.data["LogCurves"][i].setPen(None)#(j,n))
                 self.data["LogCurves"][i].setSymbolBrush((j,n))
@@ -224,6 +240,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
                         vline = pg.InfiniteLine(angle=90,pos=h,pen=self.data["LogCurves"][i].opts["symbolBrush"])
                     except:
                         vline = pg.InfiniteLine(angle=90,pos=h,pen=self.data["LogCurves"][i].opts["symbolBrush"].color())
+                    self.logPlot.removeItem(self.data["HCurves"][i])
                     self.data["HCurves"][i] = vline
                     if self.data["Visible"][i]:
                         self.logPlot.addItem(vline)
@@ -232,7 +249,27 @@ class QPCRAnalyser(QtGui.QMainWindow):
     def onAddDistance(self):
         D1 =DistanceDialog(self.data)
         if D1.exec_():
-            values = D1.getValues()
+            distances, Hs = D1.getValues()
+            self.plotDeltaGDeltaH(distances,Hs)
+
+    def plotDeltaGDeltaH(self,distances,Hs):
+        self.cPlot.clear()
+        self.cPlot.plotItem.legend.items = []
+        xs = []
+        ys = []
+
+        for i in range(len(distances)-1):
+            for j in range(i+1,len(distances)):
+                xs.append(distances[i]-distances[j])
+                ys.append(Hs[i]-Hs[j])
+        curve = pg.ScatterPlotItem(xs,ys,pen=(2,3))
+        slope, intercept, r_value, p_value, std_err = stats.linregress(xs,ys)
+        fitX = np.linspace(min(xs),max(xs),100)
+        fitY = [slope*x + intercept for x in fitX]
+        self.cPlot.addItem(curve)
+        self.cPlot.addItem(pg.PlotCurveItem(fitX,fitY,pen=(1,2)))
+        self.cPlot.plotItem.legend.addItem(curve,"y = {0:.3} x + {1:.3}".format(slope,intercept))
+
 
 class DistanceDialog(QtGui.QDialog):
 
@@ -278,21 +315,21 @@ class DistanceDialog(QtGui.QDialog):
 
     def populateTable(self):
         cells = []
-        Hs = []
+        self.Hs = []
         for i,cell in enumerate(self.data["Cells"]):
             if self.data["Visible"][i]:
                 cells.append(cell.split(" ")[0])
-                Hs.append(self.data["Hs"][i])
+                self.Hs.append(self.data["Hs"][i])
         for row in range(self.table.rowCount()):
             self.table.setItem(row,0, QtGui.QTableWidgetItem(str(cells[row])))
-            self.table.setItem(row,1, QtGui.QTableWidgetItem(str(round(Hs[row],1))))
+            self.table.setItem(row,1, QtGui.QTableWidgetItem(str(round(self.Hs[row],1))))
 
     def getValues(self):
         #Read last oclumn
         distances = []
         for row in range(self.table.rowCount()):
             distances.append(float(self.table.item(row,2).text()))
-        return distances
+        return distances,self.Hs
 
 
 if __name__ == '__main__':
