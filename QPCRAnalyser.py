@@ -2,6 +2,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtGui, QtCore, QtWidgets
+from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
 from scipy import stats
 import os
 
@@ -13,7 +16,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
         Constructor for the analyser GUI
         '''
         #Start with essential data structures
-        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[],"Visible":[],"RawCurves":[],"LogCurves":[],"Hs":[],"HCurves":[]}
+        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[], "LogXs":[],"LogYs":[],"Visible":[],"RawCurves":[],"LogCurves":[],"Hs":[],"HCurves":[],"Alphas":[],"AlphaCurves":[]}
+        self.threshold  = None
+        self.cX = None
+        self.cY = None
+        self.cFitX = None
+        self.cFitY = None
         #Set global settings for plots
         pg.setConfigOption('background', (40,40,40))
         pg.setConfigOption('foreground', (220,220,220))
@@ -61,6 +69,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
         addDistance.setStatusTip('Add information about spacing of shown data')
         addDistance.triggered.connect(self.onAddDistance)
         analysisMenu.addAction(addDistance)
+        #Add plot saving
+        savePlot = QtGui.QAction("Save plots", self)
+        savePlot.setShortcut("Ctrl+S")
+        savePlot.setStatusTip('Save all 3 plots to file')
+        savePlot.triggered.connect(self.onSavePlot)
+        fileMenu.addAction(savePlot)
 
     def onOpenFile(self):
         '''
@@ -101,9 +115,15 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 self.data["Xs"].append(x)
                 self.data["Visible"].append(False)
                 self.data["RawCurves"].append(pg.PlotCurveItem(x,y))
-                self.data["LogCurves"].append(pg.PlotDataItem(x,np.log(y),symbol='o',symbolSize=5,symbolPen=None))
                 self.data["Hs"].append(-1)
                 self.data["HCurves"].append(pg.InfiniteLine())
+                self.data["Alphas"].append(-1)
+                self.data["AlphaCurves"].append(pg.PlotCurveItem([],[]))
+                logX = [x[i] for i in range(len(x)) if y[i] >0]
+                logY = [np.log2(y[i]) for i in range(len(x)) if y[i] >0]
+                self.data["LogXs"].append(logX)
+                self.data["LogYs"].append(logY)
+                self.data["LogCurves"].append(pg.PlotDataItem(logX,logY,symbol='o',symbolSize=5,symbolPen=None))
 
     def setUpUI(self):
         '''
@@ -126,6 +146,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         logPlotLayout = QtGui.QGridLayout()
         self.logPlot = pg.PlotWidget()
         self.logPlot.showGrid(x=True,y=True)
+        self.logPlot.addLegend()
         logPlotLayout.addWidget(self.logPlot,0,0)
         self.logPlot.setLabel('bottom', "Cycle")
         self.logPlot.setLabel('left', "Log(flourescence)")
@@ -204,6 +225,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 if len(self.data["HCurves"]) > 0:
                     self.data["HCurves"][i].setPen((j,n))
                 j+=1
+        self.fitExpos()
 
     def onSelectThresh(self):
         num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value")
@@ -217,14 +239,15 @@ class QPCRAnalyser(QtGui.QMainWindow):
             self.threshLine  = pg.InfiniteLine(angle=0,pos=self.threshold)
             self.logPlot.addItem(self.threshLine)
             self.computeHs()
+            self.fitExpos()
 
     def computeHs(self):
         '''
         Compute the cycle at which the selected data crosses the threshold value
         '''
         for i in range(len(self.data["Xs"])):
-            xs = self.data["Xs"][i]
-            ys = np.log(self.data["Ys"][i])
+            xs = self.data["LogXs"][i]
+            ys = self.data["LogYs"][i]
             for j in range(len(xs)):
                 if ys[j] > self.threshold:
                     #We have crossed threshold get points either side
@@ -269,7 +292,37 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cPlot.addItem(curve)
         self.cPlot.addItem(pg.PlotCurveItem(fitX,fitY,pen=(1,2)))
         self.cPlot.plotItem.legend.addItem(curve,"y = {0:.3} x + {1:.3}".format(slope,intercept))
+        self.cX = xs
+        self.cY = ys
+        self.cFitX = fitX
+        self.cFitY = fitY
 
+    def onSavePlot(self):
+        S1 = SaveWindow(self.data,self.threshold,self.cX,self.cY,self.cFitX,self.cFitY)
+
+    def fitExpos(self):
+        if self.threshold != None:
+            self.logPlot.plotItem.legend.items = []
+            n=np.sum(self.data["Visible"])
+            c = 0
+            for i in range(len(self.data["Cells"])):
+                if self.data["Visible"][i]:
+                    self.logPlot.removeItem(self.data["AlphaCurves"][i])
+                    h = round(self.data["Hs"][i])
+                    index = len([k for k in range(len(self.data["LogXs"][i])) if self.data["LogXs"][i][k] <= h])
+                    x = np.asarray(self.data["LogXs"][i])[index-2:index+2]
+                    y = np.asarray(self.data["LogYs"][i])[index-2:index+2]
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
+                    self.data["Alphas"][i] = slope
+                    xFit = np.linspace(x[0],x[-1],100)
+                    yFit = [i*slope + intercept for i in xFit]
+                    curve = pg.PlotCurveItem(xFit,yFit,pen=(c,n))
+                    c = c + 1
+                    self.logPlot.addItem(curve)
+                    self.logPlot.plotItem.legend.addItem(curve,"a= {0:.3}".format(slope))
+                    self.data["AlphaCurves"][i] = curve
+                else:
+                    self.logPlot.removeItem(self.data["AlphaCurves"][i])
 
 class DistanceDialog(QtGui.QDialog):
 
@@ -294,6 +347,8 @@ class DistanceDialog(QtGui.QDialog):
         self.table.setRowCount(np.sum(self.data["Visible"]))
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels(["Cell","H value","Distance"])
+        self.table.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
+        self.table.resizeColumnsToContents()
         self.uiLayout.addWidget(self.table,0,0,1,2)
         self.populateTable()
 
@@ -330,6 +385,118 @@ class DistanceDialog(QtGui.QDialog):
         for row in range(self.table.rowCount()):
             distances.append(float(self.table.item(row,2).text()))
         return distances,self.Hs
+
+
+class SaveWindow(QtGui.QMainWindow):
+
+    def __init__(self,data,thresh,cX,cY,cFitX,cFitY,parent=None):
+        QtGui.QMainWindow.__init__(self,parent)
+        self.data = data
+        self.thresh = thresh
+        self.cX = cX
+        self.cY = cY
+        self.cFitX = cFitX
+        self.cFitY = cFitY
+        self.setWindowTitle("Saveplot")
+        self.setUpUI()
+        self.setUpPlots()
+        self.setUpMainWidget()
+        self.plotData()
+
+    def setUpUI(self):
+        self.uiLayout = QtGui.QGridLayout()
+        self.rawButton = QtGui.QRadioButton("Raw")
+        self.rawButton.setChecked(True)
+        self.logButton = QtGui.QRadioButton("log")
+        self.cButton = QtGui.QRadioButton("C period")
+        self.rawButton.clicked.connect(self.plotData)
+        self.logButton.clicked.connect(self.plotData)
+        self.threshButton = QtGui.QCheckBox("Thresh line")
+        self.fitButton = QtGui.QCheckBox("Fits")
+
+        self.cButton.clicked.connect(self.plotData)
+        self.threshButton.clicked.connect(self.plotData)
+        self.fitButton.clicked.connect(self.plotData)
+        self.uiLayout.addWidget(self.rawButton,0,0,1,1)
+        self.uiLayout.addWidget(self.logButton,1 ,0,1,1)
+        self.uiLayout.addWidget(self.threshButton,2 ,0,1,1)
+        self.uiLayout.addWidget(self.fitButton,3 ,0,1,1)
+        self.uiLayout.addWidget(self.cButton,4 ,0,1,1)
+
+    def setUpPlots(self):
+        # a figure instance to plot on
+        self.figure = Figure()
+        # this is the Canvas Widget that displays the `figure`
+        # it takes the `figure` instance as a parameter to __init__
+        self.canvas = FigureCanvas(self.figure)
+        self.canvas.setSizePolicy(QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        # this is the Navigation widget
+        # it takes the Canvas widget and a parent
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        self.plotLayout = QtGui.QGridLayout()
+        self.plotLayout.addWidget(self.canvas,0,0)
+        self.plotLayout.addWidget(self.toolbar,1,0)
+
+    def setUpMainWidget(self):
+        self.mainWidget = QtGui.QWidget()
+        self.mainLayout = QtGui.QGridLayout()
+        self.mainLayout.addLayout(self.uiLayout,0,0)
+        self.mainLayout.addLayout(self.plotLayout,0,1)
+        self.mainWidget.setLayout(self.mainLayout)
+        self.setCentralWidget(self.mainWidget)
+        self.show()
+
+    def plotData(self):
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+        if self.rawButton.isChecked():
+            #Plot raw data
+            for i in range(len(self.data["Cells"])):
+                if self.data["Visible"][i]:
+                    x = self.data["Xs"][i]
+                    y = self.data["Ys"][i]
+                    ax.plot(x,y, '.--',label=self.data["Cells"][i])
+            ax.legend()
+            ax.set_xlabel("Cycle number")
+            ax.set_ylabel("Flourescence")
+
+        if self.logButton.isChecked():
+            #Plot log data
+            for i in range(len(self.data["Cells"])):
+                if self.data["Visible"][i]:
+                    x = self.data["LogXs"][i]
+                    y = self.data["LogYs"][i]
+                    if self.thresh == None or self.fitButton.isChecked() == False:
+                        p = ax.plot(x,y, '.--',label = self.data["Cells"][i])
+                    else:
+                        p = ax.plot(x,y, '.--')
+                    alphaX, alphaY = self.data["AlphaCurves"][i].getData()
+                    if self.thresh != None:
+                        if self.fitButton.isChecked():
+                            ax.plot(alphaX,alphaY,color=p[0].get_color(),label=self.data["Cells"][i] + " a= {0:.3}".format(self.data["Alphas"][i]))
+                        if self.threshButton.isChecked():
+                            ax.axvline(self.data["Hs"][i],color=p[0].get_color())
+                    else:
+                        ax.plot(alphaX,alphaY,color=p[0].get_color(),label=self.data["Cells"][i])
+            #Hline at thresh value
+            if self.thresh != None and self.threshButton.isChecked():
+                ax.axhline(self.thresh,color = 'k')
+            ax.legend()
+            ax.set_xlabel("Cycle number")
+            ax.set_ylabel("Log Flourescence")
+
+        if self.cButton.isChecked() and self.cX != None:
+            #Plot c period plot
+            ax.plot(self.cX,self.cY,'.')
+            ax.plot(self.cFitX,self.cFitY,'--',label="Fit")
+            #Hline at thresh value
+            ax.legend()
+            ax.set_xlabel("Delta distance")
+            ax.set_ylabel("Delta H")
+
+
+        # refresh canvas
+        self.canvas.draw()
 
 
 if __name__ == '__main__':
