@@ -22,6 +22,8 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cY = None
         self.cFitX = None
         self.cFitY = None
+        self.concentrations =[1.0,0.2,0.04,0.008,0.0016]
+        self.distances = [0.4603,0.02516,0.963,0.0,1.0] 
         #Set global settings for plots
         pg.setConfigOption('background', (40,40,40))
         pg.setConfigOption('foreground', (220,220,220))
@@ -69,6 +71,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
         addDistance.setStatusTip('Add information about spacing of shown data')
         addDistance.triggered.connect(self.onAddDistance)
         analysisMenu.addAction(addDistance)
+        #Add callibration menu
+        calcEfficiency = QtGui.QAction("Calculate efficiency",self)
+        calcEfficiency.setShortcut("ctrl+c")
+        calcEfficiency.setStatusTip('Compute efficiency of QPCR primers using dillution')
+        calcEfficiency.triggered.connect(self.onComputeEfficiency)
+        analysisMenu.addAction(calcEfficiency)
         #Add plot saving
         savePlot = QtGui.QAction("Save plots", self)
         savePlot.setShortcut("Ctrl+S")
@@ -158,9 +166,6 @@ class QPCRAnalyser(QtGui.QMainWindow):
         #Bottom right plot
         self.cPlot = pg.PlotWidget()
         self.cPlot.showGrid(x=True,y=True)
-        self.cPlot.setLabel('bottom', "Delta G")
-        self.cPlot.setLabel('left', "Delta H")
-        self.cPlot.setLabel('top', "Delta H Delta G Plot")
         self.cPlot.addLegend()
         mainLayout.addWidget(self.cPlot,1,1)
 
@@ -228,7 +233,11 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.fitExpos()
 
     def onSelectThresh(self):
-        num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value")
+        if self.threshold == None:
+            default = 0
+        else:
+            default = self.threshold
+        num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value",value=default)
         if ok:
             try:
                 self.logPlot.removeItem(self.threshLine)
@@ -270,13 +279,18 @@ class QPCRAnalyser(QtGui.QMainWindow):
                     break
 
     def onAddDistance(self):
-        D1 =DistanceDialog(self.data)
+        D1 =DistanceDialog(self.data,defaults=self.distances)
         if D1.exec_():
             distances, Hs = D1.getValues()
+            self.distances = distances
             self.plotDeltaGDeltaH(distances,Hs)
 
     def plotDeltaGDeltaH(self,distances,Hs):
+        self.call = False
         self.cPlot.clear()
+        self.cPlot.setLabel('bottom', "Delta G")
+        self.cPlot.setLabel('left', "Delta H")
+        self.cPlot.setLabel('top', "Delta H Delta G Plot")
         self.cPlot.plotItem.legend.items = []
         xs = []
         ys = []
@@ -298,7 +312,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cFitY = fitY
 
     def onSavePlot(self):
-        S1 = SaveWindow(self.data,self.threshold,self.cX,self.cY,self.cFitX,self.cFitY)
+        S1 = SaveWindow(self.data,self.threshold,self.cX,self.cY,self.cFitX,self.cFitY,call=self.call)
 
     def fitExpos(self):
         if self.threshold != None:
@@ -319,16 +333,49 @@ class QPCRAnalyser(QtGui.QMainWindow):
                     curve = pg.PlotCurveItem(xFit,yFit,pen=(c,n))
                     c = c + 1
                     self.logPlot.addItem(curve)
-                    self.logPlot.plotItem.legend.addItem(curve,"a= {0:.3}".format(slope))
+                    self.logPlot.plotItem.legend.addItem(curve,"a= {0:.3} t= {1:.3}".format(slope,self.data["Hs"][i]))
                     self.data["AlphaCurves"][i] = curve
                 else:
                     self.logPlot.removeItem(self.data["AlphaCurves"][i])
 
+    def onComputeEfficiency(self):
+        D1 = DistanceDialog(self.data,defaults=self.concentrations ,call=True)
+        if D1.exec_():
+            concentrations, cts = D1.getValues()
+            self.concentrations = concentrations
+            self.plotCallCurve(concentrations,cts)
+
+    def plotCallCurve(self,concentrations,cts):
+        self.call = True
+        self.cPlot.clear()
+        self.cPlot.setLabel('bottom', "Log(concentration)")
+        self.cPlot.setLabel('left', "ct")
+        self.cPlot.setLabel('top', "Callibration curve")
+        self.cPlot.plotItem.legend.items = []
+        x = list(np.log10(concentrations))
+        y = (cts)
+        curve = pg.ScatterPlotItem(x,y,pen=(2,3))
+        slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
+        fitX = np.linspace(min(x),max(x),100)
+        fitY = [slope*X + intercept for X in fitX]
+        curveFit = pg.PlotCurveItem(fitX,fitY,pen=(1,2))
+        self.cPlot.addItem(curve)
+        self.cPlot.addItem(curveFit)
+        self.cPlot.plotItem.legend.addItem(curveFit,"y = {0:.3} x + {1:.3}".format(slope,intercept))
+        efficiency =((10**(-1.0/slope)) -1 )*100.0
+        self.cPlot.plotItem.legend.addItem(curve,"R2={0:.3} EFF={1:.4}".format(r_value**2,efficiency))
+        self.cX = x
+        self.cY = y
+        self.cFitX = fitX
+        self.cFitY = fitY
+
 class DistanceDialog(QtGui.QDialog):
 
-    def __init__(self,dataDic,parent=None):
+    def __init__(self,dataDic,defaults=None,parent=None,call=False):
         QtGui.QDialog.__init__(self,parent)
+        self.call = call
         self.data = dataDic
+        self.defaults = defaults
         self.setWindowTitle("Add distance data")
         self.setUpUI()
         self.setUpMainWidget()
@@ -346,7 +393,10 @@ class DistanceDialog(QtGui.QDialog):
         self.table = QtGui.QTableWidget()
         self.table.setRowCount(np.sum(self.data["Visible"]))
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["Cell","H value","Distance"])
+        if self.call:
+            self.table.setHorizontalHeaderLabels(["Cell","H value","DNA concentration"])
+        else:
+            self.table.setHorizontalHeaderLabels(["Cell","H value","Distance"])
         self.table.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
         self.table.resizeColumnsToContents()
         self.uiLayout.addWidget(self.table,0,0,1,2)
@@ -378,6 +428,11 @@ class DistanceDialog(QtGui.QDialog):
         for row in range(self.table.rowCount()):
             self.table.setItem(row,0, QtGui.QTableWidgetItem(str(cells[row])))
             self.table.setItem(row,1, QtGui.QTableWidgetItem(str(round(self.Hs[row],1))))
+            if self.defaults!= None:
+                try:
+                    self.table.setItem(row,2, QtGui.QTableWidgetItem(str(self.defaults[row])))
+                except:
+                    pass
 
     def getValues(self):
         #Read last oclumn
@@ -389,9 +444,10 @@ class DistanceDialog(QtGui.QDialog):
 
 class SaveWindow(QtGui.QMainWindow):
 
-    def __init__(self,data,thresh,cX,cY,cFitX,cFitY,parent=None):
+    def __init__(self,data,thresh,cX,cY,cFitX,cFitY,call=False,parent=None):
         QtGui.QMainWindow.__init__(self,parent)
         self.data = data
+        self.call = call
         self.thresh = thresh
         self.cX = cX
         self.cY = cY
@@ -487,12 +543,21 @@ class SaveWindow(QtGui.QMainWindow):
 
         if self.cButton.isChecked() and self.cX != None:
             #Plot c period plot
-            ax.plot(self.cX,self.cY,'.')
-            ax.plot(self.cFitX,self.cFitY,'--',label="Fit")
-            #Hline at thresh value
-            ax.legend()
-            ax.set_xlabel("Delta distance")
-            ax.set_ylabel("Delta H")
+            if self.call:
+                slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
+                efficiency =((10**(-1.0/slope)) -1 )*100.0
+                ax.plot(self.cX,self.cY,'.',label="Efficiency {0:.4}% R2 {1:.3}".format(efficiency,r_value**2))
+                ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3}".format(slope,intercept))
+                ax.legend()
+                ax.set_xlabel("Log(concentration)")
+                ax.set_ylabel("ct")
+            else:
+                slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
+                ax.plot(self.cX,self.cY,'.')
+                ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3}".format(slope,intercept))
+                ax.legend()
+                ax.set_xlabel("Delta distance")
+                ax.set_ylabel("Delta H")
 
 
         # refresh canvas
