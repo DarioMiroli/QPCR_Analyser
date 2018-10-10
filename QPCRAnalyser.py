@@ -16,14 +16,15 @@ class QPCRAnalyser(QtGui.QMainWindow):
         Constructor for the analyser GUI
         '''
         #Start with essential data structures
-        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[], "LogXs":[],"LogYs":[],"Visible":[],"RawCurves":[],"LogCurves":[],"Hs":[],"HCurves":[],"Alphas":[],"AlphaCurves":[]}
+        self.data = {"Files":[] ,"Cells":[], "Xs":[], "Ys":[], "LogXs":[],"LogYs":[],
+                    "Visible":[],"RawCurves":[],"LogCurves":[],"Hs":[],"HCurves":[],"RawHCurves":[], "Alphas":[],"AlphaCurves":[]}
         self.threshold  = None
         self.cX = None
         self.cY = None
         self.cFitX = None
         self.cFitY = None
         self.concentrations =[1.0,0.2,0.04,0.008,0.0016]
-        self.distances = [0.4603,0.02516,0.963,0.0,1.0] 
+        self.distances = [0.4603,0.02516,0.963,0.0,1.0]
         #Set global settings for plots
         pg.setConfigOption('background', (40,40,40))
         pg.setConfigOption('foreground', (220,220,220))
@@ -292,20 +293,24 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cPlot.setLabel('left', "Delta H")
         self.cPlot.setLabel('top', "Delta H Delta G Plot")
         self.cPlot.plotItem.legend.items = []
+        Hs = [x for _,x in sorted(zip(distances,Hs))]
+        distances = sorted(distances)
+
         xs = []
         ys = []
-
         for i in range(len(distances)-1):
             for j in range(i+1,len(distances)):
-                xs.append(distances[i]-distances[j])
-                ys.append(Hs[i]-Hs[j])
+                xs.append(distances[j]-distances[i])
+                ys.append(Hs[j]-Hs[i])
         curve = pg.ScatterPlotItem(xs,ys,pen=(2,3))
         slope, intercept, r_value, p_value, std_err = stats.linregress(xs,ys)
-        fitX = np.linspace(min(xs),max(xs),100)
+        slope2, _, _, _ = np.linalg.lstsq(np.asarray(xs)[:,np.newaxis],ys)
+        fitX = np.linspace(0,max(xs),100)
         fitY = [slope*x + intercept for x in fitX]
         self.cPlot.addItem(curve)
         self.cPlot.addItem(pg.PlotCurveItem(fitX,fitY,pen=(1,2)))
-        self.cPlot.plotItem.legend.addItem(curve,"y = {0:.3} x + {1:.3}".format(slope,intercept))
+        self.cPlot.addItem(pg.PlotCurveItem(fitX,fitX*slope2,pen=(2,2)))
+        self.cPlot.plotItem.legend.addItem(curve,"y = {0:.3} x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
         self.cX = xs
         self.cY = ys
         self.cFitX = fitX
@@ -554,7 +559,9 @@ class SaveWindow(QtGui.QMainWindow):
             else:
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
                 ax.plot(self.cX,self.cY,'.')
-                ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3}".format(slope,intercept))
+                ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
+                slope2, _, _, _ = np.linalg.lstsq(np.asarray(self.cX)[:,np.newaxis],self.cY)
+                ax.plot(self.cX,self.cX*slope2, '-', label= "Force 0 ")
                 ax.legend()
                 ax.set_xlabel("Delta distance")
                 ax.set_ylabel("Delta H")
