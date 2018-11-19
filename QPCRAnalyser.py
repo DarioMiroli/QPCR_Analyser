@@ -6,6 +6,7 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 from scipy import stats
+import time
 import os
 
 class QPCRAnalyser(QtGui.QMainWindow):
@@ -23,6 +24,8 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cY = None
         self.cFitX = None
         self.cFitY = None
+        self.call = False
+        self.LREZones = None
         self.concentrations =[1.0,0.2,0.04,0.008,0.0016]
         self.distances = [0.4603,0.02516,0.963,0.0,1.0]
         #Set global settings for plots
@@ -73,17 +76,37 @@ class QPCRAnalyser(QtGui.QMainWindow):
         addDistance.triggered.connect(self.onAddDistance)
         analysisMenu.addAction(addDistance)
         #Add callibration menu
-        calcEfficiency = QtGui.QAction("Calculate efficiency",self)
+        calcEfficiency = QtGui.QAction("Calc standard curve efficiency",self)
         calcEfficiency.setShortcut("ctrl+c")
         calcEfficiency.setStatusTip('Compute efficiency of QPCR primers using dillution')
         calcEfficiency.triggered.connect(self.onComputeEfficiency)
         analysisMenu.addAction(calcEfficiency)
+        #Add threshold scan
+        thresholdScan = QtGui.QAction("Threshold Scan",self)
+        thresholdScan.setShortcut("shift+t")
+        thresholdScan.setStatusTip('Scan through possible threshold values and plot results')
+        thresholdScan.triggered.connect(self.onThresholdScan)
+        analysisMenu.addAction(thresholdScan)
+
+        #Add LRE efficiency calculation
+        LRE = QtGui.QAction("Calc LRE efficiency",self)
+        LRE.setShortcut("shift+L")
+        LRE.setStatusTip('Calculate efficiency of single trace')
+        LRE.triggered.connect(self.CalcLREEfficiency)
+        analysisMenu.addAction(LRE)
+
         #Add plot saving
         savePlot = QtGui.QAction("Save plots", self)
         savePlot.setShortcut("Ctrl+S")
         savePlot.setStatusTip('Save all 3 plots to file')
         savePlot.triggered.connect(self.onSavePlot)
         fileMenu.addAction(savePlot)
+        #Add saving to peters format
+        savePetersFormat = QtGui.QAction("Save peters format", self)
+        savePetersFormat.setShortcut("Ctrl+P")
+        savePetersFormat.setStatusTip('Save selected to peters format')
+        savePetersFormat.triggered.connect(self.saveToPetersFormat)
+        fileMenu.addAction(savePetersFormat)
 
     def onOpenFile(self):
         '''
@@ -123,7 +146,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 self.data["Ys"].append(y)
                 self.data["Xs"].append(x)
                 self.data["Visible"].append(False)
-                self.data["RawCurves"].append(pg.PlotCurveItem(x,y))
+                self.data["RawCurves"].append(pg.PlotDataItem(x,y,symbolSize=7.0,symbol='o',symbolPen=None))
                 self.data["Hs"].append(-1)
                 self.data["HCurves"].append(pg.InfiniteLine())
                 self.data["Alphas"].append(-1)
@@ -226,6 +249,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
             if self.data["Visible"][i]:
                 self.rawPlot.plotItem.legend.addItem(self.data["RawCurves"][i],self.data["Cells"][i].split(" ")[0])
                 curve.setPen((j,n))
+                curve.setSymbolBrush((j,n))
                 self.data["LogCurves"][i].setPen(None)#(j,n))
                 self.data["LogCurves"][i].setSymbolBrush((j,n))
                 if len(self.data["HCurves"]) > 0:
@@ -242,12 +266,16 @@ class QPCRAnalyser(QtGui.QMainWindow):
         if ok:
             try:
                 self.logPlot.removeItem(self.threshLine)
+                self.rawPlot.removeItem(self.rawThreshLine)
             except:
                 pass
             #Add horizontal line at value
             self.threshold = num
             self.threshLine  = pg.InfiniteLine(angle=0,pos=self.threshold)
             self.logPlot.addItem(self.threshLine)
+            self.rawThreshold = 2**self.threshold
+            self.rawThreshLine = pg.InfiniteLine(angle=0,pos=self.rawThreshold)
+            self.rawPlot.addItem(self.rawThreshLine)
             self.computeHs()
             self.fitExpos()
 
@@ -307,6 +335,8 @@ class QPCRAnalyser(QtGui.QMainWindow):
         slope2, _, _, _ = np.linalg.lstsq(np.asarray(xs)[:,np.newaxis],ys)
         fitX = np.linspace(0,max(xs),100)
         fitY = [slope*x + intercept for x in fitX]
+        deltaGOverDeltaHEstimates = [ys[k]/xs[k] for k in range(len(xs))]
+        print("Median:" + str(np.median(deltaGOverDeltaHEstimates)) )
         self.cPlot.addItem(curve)
         self.cPlot.addItem(pg.PlotCurveItem(fitX,fitY,pen=(1,2)))
         self.cPlot.addItem(pg.PlotCurveItem(fitX,fitX*slope2,pen=(2,2)))
@@ -317,7 +347,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cFitY = fitY
 
     def onSavePlot(self):
-        S1 = SaveWindow(self.data,self.threshold,self.cX,self.cY,self.cFitX,self.cFitY,call=self.call)
+        S1 = SaveWindow(self.data,self.threshold,self.rawThreshold, self.cX,self.cY,self.cFitX,self.cFitY,call=self.call)
 
     def fitExpos(self):
         if self.threshold != None:
@@ -329,17 +359,21 @@ class QPCRAnalyser(QtGui.QMainWindow):
                     self.logPlot.removeItem(self.data["AlphaCurves"][i])
                     h = round(self.data["Hs"][i])
                     index = len([k for k in range(len(self.data["LogXs"][i])) if self.data["LogXs"][i][k] <= h])
-                    x = np.asarray(self.data["LogXs"][i])[index-2:index+2]
-                    y = np.asarray(self.data["LogYs"][i])[index-2:index+2]
-                    slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
-                    self.data["Alphas"][i] = slope
-                    xFit = np.linspace(x[0],x[-1],100)
-                    yFit = [i*slope + intercept for i in xFit]
-                    curve = pg.PlotCurveItem(xFit,yFit,pen=(c,n))
-                    c = c + 1
-                    self.logPlot.addItem(curve)
-                    self.logPlot.plotItem.legend.addItem(curve,"a= {0:.3} t= {1:.3}".format(slope,self.data["Hs"][i]))
-                    self.data["AlphaCurves"][i] = curve
+                    if index > 1:
+                        x = np.asarray(self.data["LogXs"][i])[index-2:index+2]
+                        y = np.asarray(self.data["LogYs"][i])[index-2:index+2]
+                        slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
+                        alpha = 2.0**(slope) - 1.0
+                        self.data["Alphas"][i] = alpha
+                        xFit = np.linspace(x[0],x[-1],100)
+                        yFit = [i*slope + intercept for i in xFit]
+                        curve = pg.PlotCurveItem(xFit,yFit,pen=(c,n))
+                        c = c + 1
+                        self.logPlot.addItem(curve)
+                        self.logPlot.plotItem.legend.addItem(curve,"a= {0:.3} t= {1:.3}".format(alpha,self.data["Hs"][i]))
+                        self.data["AlphaCurves"][i] = curve
+                    else:
+                        c = c+1
                 else:
                     self.logPlot.removeItem(self.data["AlphaCurves"][i])
 
@@ -353,12 +387,12 @@ class QPCRAnalyser(QtGui.QMainWindow):
     def plotCallCurve(self,concentrations,cts):
         self.call = True
         self.cPlot.clear()
-        self.cPlot.setLabel('bottom', "Log(concentration)")
-        self.cPlot.setLabel('left', "ct")
+        self.cPlot.setLabel('left', "Log(concentration)")
+        self.cPlot.setLabel('bottom', "ct")
         self.cPlot.setLabel('top', "Callibration curve")
         self.cPlot.plotItem.legend.items = []
-        x = list(np.log10(concentrations))
-        y = (cts)
+        y = list(np.log10(concentrations))
+        x = (cts)
         curve = pg.ScatterPlotItem(x,y,pen=(2,3))
         slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
         fitX = np.linspace(min(x),max(x),100)
@@ -367,12 +401,144 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cPlot.addItem(curve)
         self.cPlot.addItem(curveFit)
         self.cPlot.plotItem.legend.addItem(curveFit,"y = {0:.3} x + {1:.3}".format(slope,intercept))
-        efficiency =((10**(-1.0/slope)) -1 )*100.0
+        #efficiency =((10**(-1.0/slope)) -1 )*100.0
+        efficiency =((10**(-1.0*slope)) -1 )*100
         self.cPlot.plotItem.legend.addItem(curve,"R2={0:.3} EFF={1:.4}".format(r_value**2,efficiency))
         self.cX = x
         self.cY = y
         self.cFitX = fitX
         self.cFitY = fitY
+        return efficiency
+
+    def onThresholdScan(self):
+        for traceNo in range(len(self.data["LogYs"])):
+            if self.data["Visible"][traceNo]:
+                x = self.data["LogXs"][traceNo]
+                y = self.data["LogYs"][traceNo]
+                rSquareds = []
+                errors = []
+                xs = []
+                for i in range(len(x)-4):
+                    fitX = x[i:i+4]
+                    fitY = y[i:i+4]
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(fitX,fitY)
+                    yPredict = slope*np.asarray(fitX) + intercept
+                    error = np.mean((yPredict-fitY)**2)
+                    rSquareds.append(r_value**2)
+                    errors.append(error)
+                    xs.append(x[i])
+                plt.plot(xs,rSquareds,'o--')
+                plt.show()
+                plt.plot(xs,errors,'o--')
+                plt.show()
+
+
+
+
+        return
+        print("Threshold scan")
+        #Determine min max values of all plotted traces
+        minY = 1E6
+        maxY = -1E6
+        for i,yTrace in enumerate(self.data["LogYs"]):
+            if self.data["Visible"][i]:
+                if max(yTrace) > maxY:
+                    maxY = max(yTrace)
+                if min(yTrace) < minY:
+                    minY = min(yTrace)
+        thresholds = np.linspace(minY,maxY,100)
+        alphas = [[] for i in range(sum(self.data["Visible"]))]
+        for thresh in thresholds:
+            self.threshold = thresh
+            self.computeHs()
+            self.fitExpos()
+            j = 0
+            for i,alpha in enumerate(self.data["Alphas"]):
+                if self.data["Visible"][i]:
+                    alphas[j].append(alpha)
+                    j = j+1
+        for i in range(len(alphas)):
+            plt.plot(thresholds,alphas[i])
+            plt.xlabel("Threshold")
+            plt.ylabel("Efficiency")
+        plt.show()
+
+    def saveToPetersFormat(self):
+        #Launch file selection dialoug
+        filePath, filter = QtGui.QFileDialog.getSaveFileName(self,'Open File',
+        './',filter="*.csv")
+        #If file selected start reading file
+        if filePath != '':
+            f = open(filePath,"w")
+            for i in range(len(self.data["Xs"][0])):
+                line = ''
+                for j in range(-1,len(self.data["Xs"])):
+                    if j == -1:
+                        line += str(self.data["Xs"][j][i])
+                    else:
+                        if self.data["Visible"][j]:
+                            line += " , "
+                            line += str(self.data["Ys"][j][i])
+
+                line += "\n"
+                f.write(line)
+
+    def CalcLREEfficiency(self):
+        #Plotting stuff
+        self.cPlot.clear()
+        self.cPlot.setLabel('left', "Cycle efficiency")
+        self.cPlot.setLabel('bottom', "Flourescence")
+        self.cPlot.setLabel('top', "Callibration curve")
+        self.cPlot.plotItem.legend.items = []
+
+        if self.LREZones != None:
+            for zone in self.LREZones:
+                self.rawPlot.removeItem(zone)
+        self.LREZones = []
+
+        c = 0
+        for i in range(len(self.data["Xs"])):
+            if self.data["Visible"][i]:
+                x = self.data["Xs"][i]
+                y = self.data["Ys"][i]
+                flourescence = y[1:]
+                cycleEfficiency = [(y[j]/y[j-1]) -1 for j in range(1,len(y))]
+                curve = pg.ScatterPlotItem(flourescence,cycleEfficiency,pen=None,brush=(c,sum(self.data["Visible"])))
+                self.cPlot.addItem(curve)
+                hReigon = pg.LinearRegionItem([min(x),0.1*max(x)],movable=True,bounds=[min(x),max(x)])
+                color = pg.mkColor((c,sum(self.data["Visible"])))
+                color.setAlpha(int(25))
+                hReigon.setBrush(color)
+                self.rawPlot.addItem(hReigon)
+                self.LREZones.append(hReigon)
+                hReigon.sigRegionChangeFinished.connect(self.replotLRE)
+                c+=1
+
+    def replotLRE(self):
+        self.cPlot.clear()
+        c = 0
+        for i in range(len(self.data["Xs"])):
+            if self.data["Visible"][i]:
+                x = self.data["Xs"][i]
+                y = np.asarray(self.data["Ys"][i])
+                flourescence = y[1:]
+                minX, maxX = self.LREZones[c].getRegion()
+                flourescence = [flourescence[j] for j in range(len(x)) if x[j] >= minX and x[j] <= maxX]
+                cycleEfficiency = [(y[j]/y[j-1]) - 1.0 for j in range(1,len(y))]
+                cycleEfficiency = [cycleEfficiency[j] for j in range(len(x)) if x[j] >= minX and x[j] <= maxX]
+                curve = pg.ScatterPlotItem(flourescence,cycleEfficiency,pen=None, brush=(c,sum(self.data["Visible"])))
+                self.cPlot.addItem(curve)
+                #Fit
+                slope, intercept, r_value, p_value, std_err = stats.linregress(flourescence,cycleEfficiency)
+                xPredict = np.linspace(0,max(flourescence),100)
+                yPredict = slope*xPredict + intercept
+                curve = pg.PlotCurveItem(xPredict,yPredict,pen=(c,sum(self.data["Visible"])))
+                self.cPlot.addItem(curve)
+                c+=1
+
+
+
+
 
 class DistanceDialog(QtGui.QDialog):
 
@@ -449,11 +615,12 @@ class DistanceDialog(QtGui.QDialog):
 
 class SaveWindow(QtGui.QMainWindow):
 
-    def __init__(self,data,thresh,cX,cY,cFitX,cFitY,call=False,parent=None):
+    def __init__(self,data,thresh,rawThresh,cX,cY,cFitX,cFitY,call=False,parent=None):
         QtGui.QMainWindow.__init__(self,parent)
         self.data = data
         self.call = call
         self.thresh = thresh
+        self.rawThresh = rawThresh
         self.cX = cX
         self.cY = cY
         self.cFitX = cFitX
@@ -520,6 +687,8 @@ class SaveWindow(QtGui.QMainWindow):
             ax.legend()
             ax.set_xlabel("Cycle number")
             ax.set_ylabel("Flourescence")
+            if self.rawThresh != None and self.threshButton.isChecked():
+                ax.axhline(self.rawThresh,color = 'k')
 
         if self.logButton.isChecked():
             #Plot log data
@@ -550,12 +719,12 @@ class SaveWindow(QtGui.QMainWindow):
             #Plot c period plot
             if self.call:
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
-                efficiency =((10**(-1.0/slope)) -1 )*100.0
+                efficiency =((10**(-slope)) -1 )*100.0
                 ax.plot(self.cX,self.cY,'.',label="Efficiency {0:.4}% R2 {1:.3}".format(efficiency,r_value**2))
                 ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3}".format(slope,intercept))
                 ax.legend()
-                ax.set_xlabel("Log(concentration)")
-                ax.set_ylabel("ct")
+                ax.set_ylabel("Log(initial concentration)")
+                ax.set_xlabel("ct")
             else:
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
                 ax.plot(self.cX,self.cY,'.')
