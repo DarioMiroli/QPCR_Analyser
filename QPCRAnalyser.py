@@ -24,7 +24,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cY = None
         self.cFitX = None
         self.cFitY = None
-        self.call = False
+        self.ctype = "Callibration"
         self.LREZones = None
         self.concentrations =[1.0,0.2,0.04,0.008,0.0016]
         self.distances = [0.4603,0.02516,0.963,0.0,1.0]
@@ -67,7 +67,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         setThresh = QtGui.QAction("Set threshold",self)
         setThresh.setShortcut("Ctrl+t")
         setThresh.setStatusTip('set threshold for log data')
-        setThresh.triggered.connect(self.onSelectThresh)
+        setThresh.triggered.connect(lambda : self.onSelectThresh(None))
         analysisMenu.addAction(setThresh)
         #Add distance calc
         addDistance = QtGui.QAction("Add distance info",self)
@@ -257,12 +257,16 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 j+=1
         self.fitExpos()
 
-    def onSelectThresh(self):
+    def onSelectThresh(self,thresh=None):
         if self.threshold == None:
             default = 0
         else:
             default = self.threshold
-        num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value",value=default)
+        if thresh == None:
+            num,ok = QtGui.QInputDialog.getDouble(self,"Select threshold","Enter threshold value",value=default)
+        else:
+            num = thresh
+            ok = True
         if ok:
             try:
                 self.logPlot.removeItem(self.threshLine)
@@ -315,7 +319,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
             self.plotDeltaGDeltaH(distances,Hs)
 
     def plotDeltaGDeltaH(self,distances,Hs):
-        self.call = False
+        self.ctype = "Distance"
         self.cPlot.clear()
         self.cPlot.setLabel('bottom', "Delta G")
         self.cPlot.setLabel('left', "Delta H")
@@ -347,7 +351,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cFitY = fitY
 
     def onSavePlot(self):
-        S1 = SaveWindow(self.data,self.threshold,self.rawThreshold, self.cX,self.cY,self.cFitX,self.cFitY,call=self.call)
+        S1 = SaveWindow(self.data,self.threshold,self.rawThreshold, self.cX,self.cY,self.cFitX,self.cFitY,ctype=self.ctype)
 
     def fitExpos(self):
         if self.threshold != None:
@@ -377,15 +381,22 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 else:
                     self.logPlot.removeItem(self.data["AlphaCurves"][i])
 
-    def onComputeEfficiency(self):
-        D1 = DistanceDialog(self.data,defaults=self.concentrations ,call=True)
-        if D1.exec_():
-            concentrations, cts = D1.getValues()
-            self.concentrations = concentrations
-            self.plotCallCurve(concentrations,cts)
+    def onComputeEfficiency(self,concs=None):
+        if concs == None:
+            D1 = DistanceDialog(self.data,defaults=self.concentrations ,call=True)
+            if D1.exec_():
+                concentrations, cts = D1.getValues()
+                self.concentrations = concentrations
+                self.plotCallCurve(concentrations,cts)
+        else:
+            cts = []
+            for i in range(len(self.data["Cells"])):
+                if self.data["Visible"][i]:
+                    cts.append(self.data["Hs"][i])
+            self.plotCallCurve(self.concentrations,cts)
 
     def plotCallCurve(self,concentrations,cts):
-        self.call = True
+        self.ctype = "Callibration"
         self.cPlot.clear()
         self.cPlot.setLabel('left', "Log(concentration)")
         self.cPlot.setLabel('bottom', "ct")
@@ -403,6 +414,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cPlot.plotItem.legend.addItem(curveFit,"y = {0:.3} x + {1:.3}".format(slope,intercept))
         #efficiency =((10**(-1.0/slope)) -1 )*100.0
         efficiency =((10**(-1.0*slope)) -1 )*100
+        self.standardCurveEfficienty = efficiency
         self.cPlot.plotItem.legend.addItem(curve,"R2={0:.3} EFF={1:.4}".format(r_value**2,efficiency))
         self.cX = x
         self.cY = y
@@ -411,57 +423,37 @@ class QPCRAnalyser(QtGui.QMainWindow):
         return efficiency
 
     def onThresholdScan(self):
-        for traceNo in range(len(self.data["LogYs"])):
-            if self.data["Visible"][traceNo]:
-                x = self.data["LogXs"][traceNo]
-                y = self.data["LogYs"][traceNo]
-                rSquareds = []
-                errors = []
-                xs = []
-                for i in range(len(x)-4):
-                    fitX = x[i:i+4]
-                    fitY = y[i:i+4]
-                    slope, intercept, r_value, p_value, std_err = stats.linregress(fitX,fitY)
-                    yPredict = slope*np.asarray(fitX) + intercept
-                    error = np.mean((yPredict-fitY)**2)
-                    rSquareds.append(r_value**2)
-                    errors.append(error)
-                    xs.append(x[i])
-                plt.plot(xs,rSquareds,'o--')
-                plt.show()
-                plt.plot(xs,errors,'o--')
-                plt.show()
-
-
-
-
-        return
-        print("Threshold scan")
-        #Determine min max values of all plotted traces
-        minY = 1E6
-        maxY = -1E6
-        for i,yTrace in enumerate(self.data["LogYs"]):
+        indexes = []
+        for i in range(len(self.data["Cells"])):
             if self.data["Visible"][i]:
-                if max(yTrace) > maxY:
-                    maxY = max(yTrace)
-                if min(yTrace) < minY:
-                    minY = min(yTrace)
-        thresholds = np.linspace(minY,maxY,100)
-        alphas = [[] for i in range(sum(self.data["Visible"]))]
-        for thresh in thresholds:
-            self.threshold = thresh
-            self.computeHs()
-            self.fitExpos()
-            j = 0
-            for i,alpha in enumerate(self.data["Alphas"]):
-                if self.data["Visible"][i]:
-                    alphas[j].append(alpha)
-                    j = j+1
-        for i in range(len(alphas)):
-            plt.plot(thresholds,alphas[i])
-            plt.xlabel("Threshold")
-            plt.ylabel("Efficiency")
-        plt.show()
+                indexes.append(i)
+        thresholds = np.linspace(0.01,4,200)
+        curveEfficiencies = []
+        linearEfficiencies = []
+        for i in thresholds:
+            self.onSelectThresh(np.log2(i))
+            self.onComputeEfficiency(concs=self.concentrations)
+            curveEfficiencies.append(self.standardCurveEfficienty)
+            meanLinearEfficiency = 100.0*np.mean([self.data["Alphas"][j] for j in indexes])
+            linearEfficiencies.append(meanLinearEfficiency)
+            self.app.processEvents()
+        self.cPlot.clear()
+        self.cPlot.plotItem.legend.items = []
+        self.cPlot.setLabel('left', "Efficiency")
+        self.cPlot.setLabel('bottom', "Threshold")
+        self.cPlot.setLabel('top', "Threshold scan")
+        curve = pg.PlotDataItem(thresholds,curveEfficiencies,symbolSize=7.0,symbol='o',symbolPen=None,pen=(1,2),symbolBrush=(1,2))
+        self.cPlot.addItem(curve)
+        self.cPlot.plotItem.legend.addItem(curve,"Standard curve efficiency")
+        curve = pg.PlotDataItem(thresholds,linearEfficiencies,symbolSize=7.0,symbol='o',symbolPen=None,pen=(2,2),symbolBrush=(2,2))
+        self.cPlot.addItem(curve)
+        self.cPlot.plotItem.legend.addItem(curve,"Log linear efficiency")
+        self.cX = list(thresholds)
+        self.cY = curveEfficiencies
+        self.cFitX = thresholds
+        self.cFitY = linearEfficiencies
+        self.ctype = "Efficiency"
+        return
 
     def saveToPetersFormat(self):
         #Launch file selection dialoug
@@ -537,14 +529,11 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 c+=1
 
 
-
-
-
 class DistanceDialog(QtGui.QDialog):
 
-    def __init__(self,dataDic,defaults=None,parent=None,call=False):
+    def __init__(self,dataDic,defaults=None,parent=None,ctype="Callibration"):
         QtGui.QDialog.__init__(self,parent)
-        self.call = call
+        self.ctype = ctype
         self.data = dataDic
         self.defaults = defaults
         self.setWindowTitle("Add distance data")
@@ -564,9 +553,9 @@ class DistanceDialog(QtGui.QDialog):
         self.table = QtGui.QTableWidget()
         self.table.setRowCount(np.sum(self.data["Visible"]))
         self.table.setColumnCount(3)
-        if self.call:
+        if self.ctype == "Callibration":
             self.table.setHorizontalHeaderLabels(["Cell","H value","DNA concentration"])
-        else:
+        if self.ctype == "Distnace":
             self.table.setHorizontalHeaderLabels(["Cell","H value","Distance"])
         self.table.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
         self.table.resizeColumnsToContents()
@@ -615,10 +604,10 @@ class DistanceDialog(QtGui.QDialog):
 
 class SaveWindow(QtGui.QMainWindow):
 
-    def __init__(self,data,thresh,rawThresh,cX,cY,cFitX,cFitY,call=False,parent=None):
+    def __init__(self,data,thresh,rawThresh,cX,cY,cFitX,cFitY,ctype="Callibration",parent=None):
         QtGui.QMainWindow.__init__(self,parent)
         self.data = data
-        self.call = call
+        self.ctype = ctype
         self.thresh = thresh
         self.rawThresh = rawThresh
         self.cX = cX
@@ -717,7 +706,7 @@ class SaveWindow(QtGui.QMainWindow):
 
         if self.cButton.isChecked() and self.cX != None:
             #Plot c period plot
-            if self.call:
+            if self.ctype == "Callibration":
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
                 efficiency =((10**(-slope)) -1 )*100.0
                 ax.plot(self.cX,self.cY,'.',label="Efficiency {0:.4}% R2 {1:.3}".format(efficiency,r_value**2))
@@ -725,7 +714,7 @@ class SaveWindow(QtGui.QMainWindow):
                 ax.legend()
                 ax.set_ylabel("Log(initial concentration)")
                 ax.set_xlabel("ct")
-            else:
+            elif self.ctype == "Distance" :
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
                 ax.plot(self.cX,self.cY,'.')
                 ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
@@ -734,6 +723,12 @@ class SaveWindow(QtGui.QMainWindow):
                 ax.legend()
                 ax.set_xlabel("Delta distance")
                 ax.set_ylabel("Delta H")
+            elif self.ctype == "Efficiency":
+                ax.plot(self.cX,self.cY,'--',label="Standard curve efficiency")
+                ax.plot(self.cFitX,self.cFitY,'--',label="Linear log efficiency")
+                ax.legend()
+                ax.set_xlabel("Threshold value")
+                ax.set_ylabel("Efficiency")
 
 
         # refresh canvas
