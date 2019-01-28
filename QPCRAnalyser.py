@@ -95,6 +95,15 @@ class QPCRAnalyser(QtGui.QMainWindow):
         LRE.triggered.connect(self.CalcLREEfficiency)
         analysisMenu.addAction(LRE)
 
+        #Add delta H delta G threshold sweep
+        DGDHThresholdSweep = QtGui.QAction("Delta H Delta G Threshold Sweep",self)
+        DGDHThresholdSweep.setShortcut("shift+D")
+        DGDHThresholdSweep.setStatusTip('Sweeps through thresholds computing Delta G Delta H median')
+        DGDHThresholdSweep.triggered.connect(self.onDeltaHDeltaGSweep)
+        analysisMenu.addAction(DGDHThresholdSweep)
+
+
+
         #Add plot saving
         savePlot = QtGui.QAction("Save plots", self)
         savePlot.setShortcut("Ctrl+S")
@@ -327,7 +336,6 @@ class QPCRAnalyser(QtGui.QMainWindow):
         self.cPlot.plotItem.legend.items = []
         Hs = [x for _,x in sorted(zip(distances,Hs))]
         distances = sorted(distances)
-
         xs = []
         ys = []
         for i in range(len(distances)-1):
@@ -336,19 +344,26 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 ys.append(Hs[j]-Hs[i])
         curve = pg.ScatterPlotItem(xs,ys,pen=(2,3))
         slope, intercept, r_value, p_value, std_err = stats.linregress(xs,ys)
-        slope2, _, _, _ = np.linalg.lstsq(np.asarray(xs)[:,np.newaxis],ys)
+        slope2, _, _, _ = np.linalg.lstsq(np.asarray(xs)[:,np.newaxis],ys,rcond=None)
         fitX = np.linspace(0,max(xs),100)
         fitY = [slope*x + intercept for x in fitX]
         deltaGOverDeltaHEstimates = [ys[k]/xs[k] for k in range(len(xs))]
-        print("Median:" + str(np.median(deltaGOverDeltaHEstimates)) )
+        #print("Median:{} Mean: {}".format(np.median(deltaGOverDeltaHEstimates), np.mean(deltaGOverDeltaHEstimates)))
+        #print("Slope1:{} Slope2: {}".format(slope, slope2))
+        #print(deltaGOverDeltaHEstimates)
         self.cPlot.addItem(curve)
-        self.cPlot.addItem(pg.PlotCurveItem(fitX,fitY,pen=(1,2)))
-        self.cPlot.addItem(pg.PlotCurveItem(fitX,fitX*slope2,pen=(2,2)))
-        self.cPlot.plotItem.legend.addItem(curve,"y = {0:.3} x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
+        fit1 = pg.PlotCurveItem(fitX,fitY,pen=(1,2))
+        self.cPlot.addItem(fit1)
+        fit2 = pg.PlotCurveItem(fitX,fitX*slope2,pen=(2,2))
+        self.cPlot.addItem(fit2)
+        self.cPlot.plotItem.legend.addItem(fit1,"y = {0:.3} x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
+        self.cPlot.plotItem.legend.addItem(fit2,"y = {0:.3} x".format(slope2[0]))
+        self.cPlot.plotItem.legend.addItem(curve,"Median = {0:.3}".format(np.median(deltaGOverDeltaHEstimates)))
         self.cX = xs
         self.cY = ys
         self.cFitX = fitX
         self.cFitY = fitY
+        return np.median(deltaGOverDeltaHEstimates), r_value**2
 
     def onSavePlot(self):
         S1 = SaveWindow(self.data,self.threshold,self.rawThreshold, self.cX,self.cY,self.cFitX,self.cFitY,ctype=self.ctype)
@@ -427,7 +442,7 @@ class QPCRAnalyser(QtGui.QMainWindow):
         for i in range(len(self.data["Cells"])):
             if self.data["Visible"][i]:
                 indexes.append(i)
-        thresholds = np.linspace(0.01,4,200)
+        thresholds = np.linspace(0.0001,0.5,200)
         curveEfficiencies = []
         linearEfficiencies = []
         for i in thresholds:
@@ -528,6 +543,39 @@ class QPCRAnalyser(QtGui.QMainWindow):
                 self.cPlot.addItem(curve)
                 c+=1
 
+    def onDeltaHDeltaGSweep(self):
+        thresholds = np.linspace(0.001,2,200)
+        medians = []
+        rsquareds = []
+        indexes = []
+        for i in range(len(self.data["Visible"])):
+            if self.data["Visible"][i]:
+                indexes.append(i)
+        self.onAddDistance()
+        for threshold in thresholds:
+            self.onSelectThresh(np.log2(threshold))
+            Hs = [self.data["Hs"][j] for j in indexes]
+            distances =  self.distances
+            median , rsquared = self.plotDeltaGDeltaH(distances,Hs)
+            medians.append(median)
+            rsquareds.append(rsquared)
+            self.app.processEvents()
+        self.cPlot.clear()
+        self.cPlot.plotItem.legend.items = []
+        self.cPlot.setLabel('left', "R squared/ Median")
+        self.cPlot.setLabel('bottom', "Threshold value")
+        self.cPlot.setLabel('top', "Threshold scan for median Delta G Delta H")
+        curve = pg.PlotDataItem(thresholds,medians,symbolSize=7.0,symbol='o',symbolPen=None,pen=(1,2),symbolBrush=(1,2))
+        self.cPlot.addItem(curve)
+        self.cPlot.plotItem.legend.addItem(curve,"Medians")
+        curve = pg.PlotDataItem(thresholds,rsquareds,symbolSize=7.0,symbol='o',symbolPen=None,pen=(2,2),symbolBrush=(2,2))
+        self.cPlot.addItem(curve)
+        self.cPlot.plotItem.legend.addItem(curve,"Rsquared values")
+        self.cX = list(thresholds)
+        self.cY = medians
+        self.cFitX = thresholds
+        self.cFitY = rsquareds
+        self.ctype = "DeltaGDeltaHSweep"
 
 class DistanceDialog(QtGui.QDialog):
 
@@ -718,10 +766,11 @@ class SaveWindow(QtGui.QMainWindow):
                 slope, intercept, r_value, p_value, std_err = stats.linregress(self.cX,self.cY)
                 ax.plot(self.cX,self.cY,'.')
                 ax.plot(self.cFitX,self.cFitY,'--',label="y= {0:.3}x + {1:.3} R2 {2:.4}".format(slope,intercept,r_value**2))
-                slope2, _, _, _ = np.linalg.lstsq(np.asarray(self.cX)[:,np.newaxis],self.cY)
-                ax.plot(self.cX,self.cX*slope2, '-', label= "Force 0 ")
+                slope2, _, _, _ = np.linalg.lstsq(np.asarray(self.cX)[:,np.newaxis],self.cY,rcond=None)
+                ax.plot(self.cX,self.cX*slope2, '-', label= "y= {0:.3}x".format(slope2[0]))
+                ax.plot([], [], ' ', label="Median of points: {0:.3}".format(np.median(np.asarray(self.cY)/np.asarray(self.cX))))
                 ax.legend()
-                ax.set_xlabel("Delta distance")
+                ax.set_xlabel("Delta G")
                 ax.set_ylabel("Delta H")
             elif self.ctype == "Efficiency":
                 ax.plot(self.cX,self.cY,'--',label="Standard curve efficiency")
