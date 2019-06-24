@@ -179,19 +179,25 @@ for thresh in logThresholds:
     standardsEff.append((10**(-1.0/slope) -1)*100 )
 #currentAxis.plot(np.log10(concentrations),meanCts)
 print(standardsEff)
-currentAxis.plot(logThresholds,standardsEff,color="C3")
+currentAxis.plot(logThresholds,standardsEff,color="C3",label="Standard curve")
 currentAxis.fill_between(logThresholds,standardsEff-std_err,standardsEff+std_err,alpha=0.5,color="C3")
+currentAxis.axhline(100.0116745,color="C5",linestyle="--",label="Maximum acceleration")
+currentAxis.fill_between(logThresholds,[99.99-1.8]*len(logThresholds),[99.99+1.8]*len(logThresholds),color="C5",linestyle="--",alpha=0.5)
+
+
 ins = currentAxis.inset_axes([0.6,0.65,0.3,0.3])
 #ins.axhline(0,color='k')
 ins.plot(logThresholds,standardsEff,color="C3")
 ins.fill_between(logThresholds,standardsEff-std_err,standardsEff+std_err,alpha=0.5,color="C3")
+ins.axhline(99.99,color="C5",linestyle="--")
+ins.fill_between(logThresholds,[99.99-1.8]*len(logThresholds),[99.99+1.8]*len(logThresholds),color="C5",linestyle="--",alpha=0.5)
 ins.set_ylim(96,103)
 #ins.set_xlabel("Cycle number")
 #ins.set_ylabel("Residuals")
-#Semi log eff comparison
+#Semi log eff compari1.8
 meanEff = np.mean(meanEfficiencies,axis=1)*100
-stdEff = np.std(meanEfficiencies,axis=1)*100
-currentAxis.plot(logThresholds,meanEff)
+stdEff = (np.std(meanEfficiencies,axis=1))*100
+currentAxis.plot(logThresholds,meanEff,label="Semi log fit")
 currentAxis.fill_between(logThresholds,meanEff-stdEff,meanEff+stdEff,alpha=0.5)
 ins.plot(logThresholds,meanEff)
 ins.fill_between(logThresholds,meanEff-stdEff,meanEff+stdEff,alpha=0.5)
@@ -200,6 +206,6 @@ currentAxis.tick_params(axis="x", labelsize=tickLabelFontSize)
 currentAxis.tick_params(axis="y", labelsize=tickLabelFontSize)
 currentAxis.set_xlabel("$log_2($Threshold value$)$",fontsize=axisLabelFontSize)
 currentAxis.set_ylabel("Efficiency (%)",fontsize=axisLabelFontSize)
-
+currentAxis.legend(fontsize="x-large",loc="lower center")
 plt.tight_layout()
 plt.show()
